@@ -33,24 +33,41 @@ Nothing needs to change inside the container or in the wrapper that launches it.
 
 ## Install
 
-Plugins run on the machine that runs the herdr **server**, which must also be
-the machine that runs `docker` (the dev box, when you attach to it remotely).
-Link the plugin there.
-
-From a pane on the dev box (or an SSH shell on it):
+Install on the machine that runs the herdr **server**, which must also be the
+machine that runs `docker`. If you attach to herdr remotely, that's the remote
+machine, so run these commands in a herdr pane or an SSH shell there.
 
 ```bash
-herdr plugin link /path/to/herdr-wrapped-agent-plugin
-herdr plugin action invoke wrapped-agent.start   # start now; server startup does it later
+herdr plugin install itaiin/herdr-wrapped-agent-plugin
+herdr plugin action invoke wrapped-agent.start   # start now; later server starts do it automatically
 ```
 
-From your laptop, through a saved machine (the path must be absolute and refer
-to the remote filesystem; don't use `~`, your local shell would expand it):
+Herdr shows the manifest and the commands the plugin will run, and asks you to
+confirm; add `--yes` to skip the prompt. To pin a release, add `--ref v0.1.0`.
+To update, run the install command again.
+
+Requirements: Linux, Python 3.9+ (standard library only), and access to the
+Docker socket.
+
+Uninstall:
 
 ```bash
-herdr --machine <label> plugin link /path/to/herdr-wrapped-agent-plugin
-herdr --machine <label> plugin action invoke wrapped-agent.start
+herdr plugin action invoke wrapped-agent.stop
+herdr plugin uninstall wrapped-agent
 ```
+
+### Develop from a local checkout
+
+```bash
+git clone https://github.com/itaiin/herdr-wrapped-agent-plugin.git
+herdr plugin link "$PWD/herdr-wrapped-agent-plugin"
+herdr plugin action invoke wrapped-agent.start
+```
+
+Restart the daemon after editing (`wrapped-agent.stop`, then `wrapped-agent.start`).
+`herdr plugin unlink wrapped-agent` removes the link and leaves the files alone.
+
+## Usage
 
 The daemon starts from the plugin's `[[startup]]` hook on every herdr server
 start, and from a `pane.created` hook as a safety net. There is one daemon per
@@ -61,13 +78,12 @@ Actions: `wrapped-agent.start`, `wrapped-agent.stop`, `wrapped-agent.status`.
 Logs and state: `$HERDR_PLUGIN_STATE_DIR/daemon-<hash>.log`
 (`~/.local/state/herdr/plugins/wrapped-agent/`).
 
-Dry run (read-only; prints what would be reported):
+Dry run (read-only; prints what would be reported), from a herdr pane in the
+plugin directory (`herdr plugin list` shows where it is):
 
 ```bash
-python3 /path/to/herdr-wrapped-agent-plugin/wrapped_agent.py scan   # run on the dev box, in a herdr pane
+python3 wrapped_agent.py scan
 ```
-
-Uninstall: `herdr plugin action invoke wrapped-agent.stop && herdr plugin unlink wrapped-agent`.
 
 ## Config
 
