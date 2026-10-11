@@ -99,3 +99,7 @@ manifest to use).
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
