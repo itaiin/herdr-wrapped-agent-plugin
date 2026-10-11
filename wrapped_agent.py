@@ -83,6 +83,13 @@ GLOBAL_VALUE_OPTS = {"-c", "--context", "-H", "--host", "--config", "-l", "--log
 
 LIVE_STATES = {"idle", "working", "blocked"}
 
+# Herdr drops reports labelled with a built-in agent (e.g. `claude`) on a pane
+# where it once saw that agent's native process exit, until it natively detects
+# the agent there again, which never happens behind `docker exec`. Such panes
+# are claimed under `<agent>` + ALIAS_SUFFIX instead, a label herdr treats as a
+# custom agent, and classified offline with the real agent's manifest.
+ALIAS_SUFFIX = "-ct"
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers (unit tested)
@@ -302,7 +309,9 @@ class DockerAPI:
 # ---------------------------------------------------------------------------
 
 class HerdrError(Exception):
-    pass
+    def __init__(self, method: str, code: str, message: str):
+        super().__init__(f"{method}: {code}: {message}")
+        self.code = code
 
 
 class Herdr:
@@ -324,12 +333,15 @@ class Herdr:
             sock.close()
         resp = json.loads(line)
         if "error" in resp:
-            raise HerdrError(f"{method}: {resp['error'].get('code')}: {resp['error'].get('message')}")
+            raise HerdrError(method, resp["error"].get("code"), resp["error"].get("message"))
         return resp["result"]
 
     def report(self, pane_id: str, agent: str, state: str):
         self.call("pane.report_agent", {"pane_id": pane_id, "source": SOURCE, "agent": agent,
                                         "state": state, "seq": time.time_ns()})
+
+    def pane_agent(self, pane_id: str) -> Optional[str]:
+        return self.call("pane.get", {"pane_id": pane_id})["pane"].get("agent")
 
     def release(self, pane_id: str, agent: str):
         self.call("pane.release_agent", {"pane_id": pane_id, "source": SOURCE, "agent": agent,
@@ -416,7 +428,7 @@ class Daemon:
         self.cfg = cfg
         self.docker = DockerAPI()
         self.client_exec = {}  # (client pid, client start) -> exec pid
-        self.held = {}  # pane id -> (agent, last reported state)
+        self.held = {}  # pane id -> (reported label, agent, last reported state)
 
     def resolve_exec(self, client: Proc, container: str) -> Optional[int]:
         key = (client.pid, client.start)
@@ -451,30 +463,53 @@ class Daemon:
             return True, foreground_agent(exec_pid, self.cfg["agents"])
         return False, None
 
+    def claim(self, pane_id: str, agent: str):
+        state = self.herdr.explain_offline(pane_id, agent) or "idle"
+        label = agent
+        self.herdr.report(pane_id, label, state)
+        if self.herdr.pane_agent(pane_id) != label:
+            label = agent + ALIAS_SUFFIX
+            self.herdr.report(pane_id, label, state)
+        self.held[pane_id] = (label, agent, state)
+        log(f"{pane_id}: claimed {label} ({state})")
+
     def update_pane(self, pane: dict):
         pane_id = pane["pane_id"]
         wrapped, agent = self.wrapped_agent(pane_id)
         held = self.held.get(pane_id)
         if held is None and wrapped and pane.get("agent"):
             # Nothing else claims docker exec panes: a previous daemon did.
-            held = self.held[pane_id] = (pane["agent"], pane.get("agent_status"))
+            label = pane["agent"]
+            base = label[: -len(ALIAS_SUFFIX)] if label.endswith(ALIAS_SUFFIX) else label
+            held = self.held[pane_id] = (label, base, pane.get("agent_status"))
         if agent is None:
             if held:
                 self.herdr.release(pane_id, held[0])
                 del self.held[pane_id]
                 log(f"{pane_id}: released {held[0]}")
             return
-        if held is None or held[0] != agent:
-            state = self.herdr.explain_offline(pane_id, agent) or "idle"
-            self.herdr.report(pane_id, agent, state)
-            self.held[pane_id] = (agent, state)
-            log(f"{pane_id}: claimed {agent} ({state})")
+        if held is None or held[1] != agent:
+            if held:
+                self.herdr.release(pane_id, held[0])
+            self.claim(pane_id, agent)
             return
-        state = self.herdr.explain_live(pane_id)
-        if state in LIVE_STATES and state != held[1]:
-            self.herdr.report(pane_id, agent, state)
-            self.held[pane_id] = (agent, state)
-            log(f"{pane_id}: {agent} {held[1]} -> {state}")
+        label, _, last = held
+        try:
+            if label == agent:
+                state = self.herdr.explain_live(pane_id)
+            else:
+                state = self.herdr.explain_offline(pane_id, agent)
+        except HerdrError as e:
+            if e.code != "agent_not_found":
+                raise
+            # Herdr dropped our claim; claim again next tick.
+            del self.held[pane_id]
+            log(f"{pane_id}: lost claim on {label}")
+            return
+        if state in LIVE_STATES and state != last:
+            self.herdr.report(pane_id, label, state)
+            self.held[pane_id] = (label, agent, state)
+            log(f"{pane_id}: {label} {last} -> {state}")
 
     def tick(self):
         panes = self.herdr.call("pane.list", {})["panes"]
@@ -493,9 +528,9 @@ class Daemon:
                 del self.client_exec[key]
 
     def release_all(self):
-        for pane_id, (agent, _) in list(self.held.items()):
+        for pane_id, (label, _, _) in list(self.held.items()):
             try:
-                self.herdr.release(pane_id, agent)
+                self.herdr.release(pane_id, label)
             except Exception:  # noqa: BLE001 - best effort on shutdown
                 pass
         self.held.clear()

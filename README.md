@@ -82,6 +82,11 @@ manifest to use).
 
 ## Limitations
 
+- If herdr once saw an agent exit natively in a pane (e.g. you ran `claude` on
+  the host there before entering the container), it ignores outside reports
+  labelled with that agent in that pane until the pane respawns. The plugin
+  then claims the pane as `<agent>-ct` (e.g. `claude-ct`) and classifies its
+  screen with the real agent's manifest (terminal title not included).
 - Docker only, via `DOCKER_HOST` or `/var/run/docker.sock` (no podman yet).
 - Session resume after a herdr restart isn't reported, since the resume command
   would have to re-enter the container.
