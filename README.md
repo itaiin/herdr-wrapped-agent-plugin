@@ -31,11 +31,25 @@ A small stdlib-only Python daemon (`wrapped_agent.py`) polls once a second:
 
 Nothing needs to change inside the container or in the wrapper that launches it.
 
-## Install (local)
+## Install
+
+Plugins run on the machine that runs the herdr **server**, which must also be
+the machine that runs `docker` (the dev box, when you attach to it remotely).
+Link the plugin there.
+
+From a pane on the dev box (or an SSH shell on it):
 
 ```bash
-herdr plugin link ~/projects/herdr-wrapped-agent-plugin
+herdr plugin link /path/to/herdr-wrapped-agent-plugin
 herdr plugin action invoke wrapped-agent.start   # start now; server startup does it later
+```
+
+From your laptop, through a saved machine (the path must be absolute and refer
+to the remote filesystem; don't use `~`, your local shell would expand it):
+
+```bash
+herdr --machine <label> plugin link /path/to/herdr-wrapped-agent-plugin
+herdr --machine <label> plugin action invoke wrapped-agent.start
 ```
 
 The daemon starts from the plugin's `[[startup]]` hook on every herdr server
@@ -50,7 +64,7 @@ Logs and state: `$HERDR_PLUGIN_STATE_DIR/daemon-<hash>.log`
 Dry run (read-only; prints what would be reported):
 
 ```bash
-python3 ~/projects/herdr-wrapped-agent-plugin/wrapped_agent.py scan
+python3 /path/to/herdr-wrapped-agent-plugin/wrapped_agent.py scan   # run on the dev box, in a herdr pane
 ```
 
 Uninstall: `herdr plugin action invoke wrapped-agent.stop && herdr plugin unlink wrapped-agent`.
